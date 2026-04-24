@@ -14,6 +14,15 @@ canvas { display: block; image-rendering: pixelated; border: 2px solid #444; }
   font-size:16px; font-family:monospace; width:200px; outline:none; }
 #nameSubmit { margin-top:10px; display:block; background:#4fa; color:#000; border:none;
   padding:6px 20px; font-size:14px; font-family:monospace; cursor:pointer; width:100%; }
+#pwOverlay { display:none; position:absolute; top:50%; left:50%; transform:translate(-50%,-50%);
+  background:#2a1a1a; border:2px solid #f44; padding:24px 32px; text-align:center; z-index:11; }
+#pwOverlay p.pwTitle { color:#f88; font-size:15px; margin-bottom:10px; font-family:monospace; }
+#pwInput { background:#1b0d0d; color:#fff; border:1px solid #f44; padding:6px 10px;
+  font-size:16px; font-family:monospace; width:200px; outline:none; }
+#pwError { color:#f44; font-size:12px; height:18px; margin-top:4px; font-family:monospace; }
+#pwButtons { margin-top:8px; display:flex; gap:8px; }
+#pwOk { flex:1; background:#f44; color:#fff; border:none; padding:6px 10px; font-size:13px; font-family:monospace; cursor:pointer; }
+#pwCancel { flex:1; background:#444; color:#fff; border:none; padding:6px 10px; font-size:13px; font-family:monospace; cursor:pointer; }
 </style>
 </head>
 <body>
@@ -22,6 +31,15 @@ canvas { display: block; image-rendering: pixelated; border: 2px solid #444; }
   <p>名前を入力してください</p>
   <input id="nameInput" type="text" maxlength="12" placeholder="名前">
   <button id="nameSubmit">記録する</button>
+</div>
+<div id="pwOverlay">
+  <p class="pwTitle">削除パスワードを入力</p>
+  <input id="pwInput" type="password" maxlength="16" placeholder="パスワード">
+  <p id="pwError"></p>
+  <div id="pwButtons">
+    <button id="pwOk">確認</button>
+    <button id="pwCancel">キャンセル</button>
+  </div>
 </div>
 <script>
 const canvas = document.getElementById('c');
@@ -33,9 +51,10 @@ const GROUND = 320;
 const PLAYER_H = 48;
 const JUMP_VY = -15;
 const TA_GOAL = 1000;
+const PW_DELETE = '3STONE';
 
 let keys = {}, prevKeys = {};
-let state = 'modeSel'; // modeSel | play | over | goal | nameinput | records
+let state = 'modeSel';
 let gameMode = 'normal';
 let modeSelCursor = 0;
 
@@ -46,18 +65,87 @@ let groundOffset = 0;
 let obstacles = [], enemies = [], groundEnemies = [], mushrooms = [], particles = [];
 let invincible = false, invincibleTimer = 0, invincibleEndTime = 0, nextMushroomDist = 480 + Math.random()*40;
 const INVINCIBLE_DURATION_MS = 3000;
-let spawnBaseInterval = 160, nextSpawnIn = 160, spawnTimer = 0;
+let spawnBaseInterval = 68, nextSpawnIn = 68, spawnTimer = 0;
 let enemySpawnBaseInterval = 280, enemyNextSpawnIn = 280, enemySpawnTimer = 0;
 let gEnemySpawnBaseInterval = 280, gEnemyNextSpawnIn = 280, gEnemySpawnTimer = 0;
 let deathReason = '';
 let lastTime = 0;
+let timeBonusDisplay = 0;
 
 let bestTime = localStorage.getItem('axeRunnerBest') ? Number(localStorage.getItem('axeRunnerBest')) : null;
 let bestDistance = localStorage.getItem('axeRunnerBestDist') ? Number(localStorage.getItem('axeRunnerBestDist')) : null;
+let bestHardDistance = localStorage.getItem('axeRunnerHardBestDist') ? Number(localStorage.getItem('axeRunnerHardBestDist')) : null;
 let taRecords = JSON.parse(localStorage.getItem('axeRunnerRecords') || '[]');
 let normalRecords = JSON.parse(localStorage.getItem('axeRunnerNormalRecords') || '[]');
+let hardRecords = JSON.parse(localStorage.getItem('axeRunnerHardRecords') || '[]');
 let pendingRecordMode = '';
 
+// --- Audio ---
+const AudioCtx = window.AudioContext || window.webkitAudioContext;
+let audioCtx = null;
+function getAC() {
+  if (!audioCtx) audioCtx = new AudioCtx();
+  if (audioCtx.state === 'suspended') audioCtx.resume();
+  return audioCtx;
+}
+function playTone(freq, type, vol, dur, freqEnd) {
+  try {
+    const ac = getAC();
+    const o = ac.createOscillator();
+    const g = ac.createGain();
+    o.connect(g); g.connect(ac.destination);
+    o.type = type;
+    o.frequency.setValueAtTime(freq, ac.currentTime);
+    if (freqEnd !== undefined) o.frequency.linearRampToValueAtTime(freqEnd, ac.currentTime + dur);
+    g.gain.setValueAtTime(vol, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    o.start(); o.stop(ac.currentTime + dur);
+  } catch(e) {}
+}
+function playNoise(vol, dur) {
+  try {
+    const ac = getAC();
+    const buf = ac.createBuffer(1, Math.floor(ac.sampleRate * dur), ac.sampleRate);
+    const data = buf.getChannelData(0);
+    for (let i = 0; i < data.length; i++) data[i] = Math.random() * 2 - 1;
+    const src = ac.createBufferSource();
+    const g = ac.createGain();
+    src.buffer = buf; src.connect(g); g.connect(ac.destination);
+    g.gain.setValueAtTime(vol, ac.currentTime);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + dur);
+    src.start(); src.stop(ac.currentTime + dur);
+  } catch(e) {}
+}
+function sndJump()     { playTone(220, 'square', 0.07, 0.13, 440); }
+function sndChop()     { playNoise(0.06, 0.08); playTone(140, 'sawtooth', 0.05, 0.09, 70); }
+function sndBreak()    { playNoise(0.13, 0.18); playTone(90, 'square', 0.07, 0.12, 40); }
+function sndKill()     {
+  playTone(440, 'square', 0.08, 0.08);
+  setTimeout(() => playTone(330, 'square', 0.07, 0.09), 80);
+  setTimeout(() => playTone(220, 'square', 0.06, 0.14), 160);
+}
+function sndPickup()   { [400,530,660,880].forEach((f,i) => setTimeout(() => playTone(f,'sine',0.06,0.09), i*45)); }
+function sndGameOver() { [280,230,180,140,100].forEach((f,i) => setTimeout(() => playTone(f,'square',0.09,0.22), i*110)); }
+function sndGoal()     { [523,659,784,1047].forEach((f,i) => setTimeout(() => playTone(f,'square',0.09,0.24), i*130)); }
+function sndTimeBonus(){ [660,880,1100].forEach((f,i) => setTimeout(() => playTone(f,'sine',0.05,0.09), i*55)); }
+function sndStomp()    { playTone(160, 'square', 0.09, 0.12, 60); }
+
+// --- BGM ---
+let bgmTimer = null, bgmBeat = 0;
+const BGM_MS = 187; // ~160 BPM 8th notes
+const bgmBass    = [65.41,0,65.41,0,73.42,0,73.42,0, 77.78,0,77.78,0,65.41,0,65.41,0];
+const bgmMelody  = [261.63,0,329.63,0,392,329.63,0,261.63, 293.66,0,369.99,0,440,369.99,0,293.66];
+function bgmTick() {
+  const b = bgmBass[bgmBeat % bgmBass.length];
+  const m = bgmMelody[bgmBeat % bgmMelody.length];
+  if (b) playTone(b, 'square', 0.035, 0.15);
+  if (m) playTone(m, 'triangle', 0.025, 0.13);
+  bgmBeat++;
+}
+function startBGM() { if (bgmTimer) return; bgmBeat = 0; bgmTimer = setInterval(bgmTick, BGM_MS); }
+function stopBGM()  { if (bgmTimer) { clearInterval(bgmTimer); bgmTimer = null; } }
+
+// --- Name overlay ---
 const nameOverlay = document.getElementById('nameOverlay');
 const nameInput = document.getElementById('nameInput');
 document.getElementById('nameSubmit').addEventListener('click', submitName);
@@ -70,6 +158,11 @@ function submitName() {
     taRecords.sort((a,b) => a.ms - b.ms);
     if (taRecords.length > 20) taRecords.length = 20;
     localStorage.setItem('axeRunnerRecords', JSON.stringify(taRecords));
+  } else if (pendingRecordMode === 'hard') {
+    hardRecords.push({ name, dist: Math.floor(distance) });
+    hardRecords.sort((a,b) => b.dist - a.dist);
+    if (hardRecords.length > 20) hardRecords.length = 20;
+    localStorage.setItem('axeRunnerHardRecords', JSON.stringify(hardRecords));
   } else {
     normalRecords.push({ name, dist: Math.floor(distance) });
     normalRecords.sort((a,b) => b.dist - a.dist);
@@ -88,13 +181,45 @@ function showNameInput(mode) {
   setTimeout(() => nameInput.focus(), 50);
 }
 
+// --- Password overlay ---
+const pwOverlay = document.getElementById('pwOverlay');
+const pwInput   = document.getElementById('pwInput');
+const pwError   = document.getElementById('pwError');
+document.getElementById('pwOk').addEventListener('click', submitPassword);
+document.getElementById('pwCancel').addEventListener('click', cancelPassword);
+pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitPassword(); e.stopPropagation(); });
+
+function showPasswordInput() {
+  pwError.textContent = '';
+  pwInput.value = '';
+  pwOverlay.style.display = 'block';
+  setTimeout(() => pwInput.focus(), 50);
+}
+function submitPassword() {
+  if (pwInput.value === PW_DELETE) {
+    resetAllRecords();
+    pwOverlay.style.display = 'none';
+    pwInput.value = '';
+  } else {
+    pwError.textContent = 'パスワードが違います';
+    pwInput.value = '';
+    pwInput.focus();
+  }
+}
+function cancelPassword() {
+  pwOverlay.style.display = 'none';
+  pwInput.value = '';
+}
+
 function resetAllRecords() {
-  taRecords = []; normalRecords = [];
-  bestTime = null; bestDistance = null;
+  taRecords = []; normalRecords = []; hardRecords = [];
+  bestTime = null; bestDistance = null; bestHardDistance = null;
   localStorage.removeItem('axeRunnerRecords');
   localStorage.removeItem('axeRunnerNormalRecords');
+  localStorage.removeItem('axeRunnerHardRecords');
   localStorage.removeItem('axeRunnerBest');
   localStorage.removeItem('axeRunnerBestDist');
+  localStorage.removeItem('axeRunnerHardBestDist');
 }
 
 const layers = [
@@ -131,10 +256,19 @@ function resetGame() {
   playStartTime = performance.now(); elapsedMs = 0; groundOffset = 0; lastTime = 0;
   obstacles = []; enemies = []; groundEnemies = []; mushrooms = []; particles = [];
   invincible = false; invincibleTimer = 0; invincibleEndTime = 0; nextMushroomDist = 480 + Math.random()*40;
-  spawnBaseInterval = 68; nextSpawnIn = 68; spawnTimer = 0;
-  enemySpawnBaseInterval = 280; enemyNextSpawnIn = 280; enemySpawnTimer = 0;
-  gEnemySpawnBaseInterval = 280; gEnemyNextSpawnIn = 320; gEnemySpawnTimer = 0;
+  timeBonusDisplay = 0;
   deathReason = '';
+
+  if (gameMode === 'hard') {
+    spawnBaseInterval = 40; nextSpawnIn = 40; spawnTimer = 0;
+    enemySpawnBaseInterval = 150; enemyNextSpawnIn = 150; enemySpawnTimer = 0;
+    gEnemySpawnBaseInterval = 150; gEnemyNextSpawnIn = 170; gEnemySpawnTimer = 0;
+  } else {
+    spawnBaseInterval = 68; nextSpawnIn = 68; spawnTimer = 0;
+    enemySpawnBaseInterval = 280; enemyNextSpawnIn = 280; enemySpawnTimer = 0;
+    gEnemySpawnBaseInterval = 280; gEnemyNextSpawnIn = 320; gEnemySpawnTimer = 0;
+  }
+
   Object.assign(player, {
     y: GROUND, vy: 0, onGround: true, animFrame: 0, animTimer: 0,
     chopping: false, chopTimer: 0, jumping: false,
@@ -154,35 +288,34 @@ function formatTime(ms) {
 document.addEventListener('keydown', e => {
   if (!keys[e.code]) {
     if (state === 'modeSel') {
-      if (e.code === 'ArrowUp' || e.code === 'ArrowLeft') modeSelCursor = 0;
-      if (e.code === 'ArrowDown' || e.code === 'ArrowRight') modeSelCursor = 1;
-      if (e.code === 'Enter') { gameMode = modeSelCursor === 0 ? 'normal' : 'timeattack'; resetGame(); state = 'play'; }
+      if (e.code === 'ArrowLeft'  || e.code === 'ArrowUp')    modeSelCursor = (modeSelCursor + 2) % 3;
+      if (e.code === 'ArrowRight' || e.code === 'ArrowDown')  modeSelCursor = (modeSelCursor + 1) % 3;
+      if (e.code === 'Enter') {
+        gameMode = ['normal','hard','timeattack'][modeSelCursor];
+        resetGame(); state = 'play'; startBGM();
+      }
       if (e.code === 'KeyR') state = 'records';
     }
     if (state === 'records') {
-      if (confirmReset) {
-        if (e.code === 'KeyY') { resetAllRecords(); confirmReset = false; }
-        if (e.code === 'KeyN' || e.code === 'Escape') confirmReset = false;
-      } else {
-        if (e.code === 'Escape') state = 'modeSel';
-        if (e.code === 'Delete') confirmReset = true;
-      }
-    }
-    if (state === 'confirmSave') {
-      if (e.code === 'KeyY') { showNameInput('normal'); }
-      if (e.code === 'KeyN') { state = 'over'; }
+      if (e.code === 'Escape') state = 'modeSel';
+      if (e.code === 'Delete') showPasswordInput();
     }
     if (state === 'over' || state === 'goal') {
-      if (e.code === 'Enter') { resetGame(); state = 'play'; }
+      if (e.code === 'Enter') { resetGame(); state = 'play'; startBGM(); }
       if (e.code === 'Escape') state = 'modeSel';
+      if (state === 'over' && (gameMode === 'normal' || gameMode === 'hard') && e.code === 'KeyY') {
+        showNameInput(gameMode);
+      }
     }
     if (state === 'play') {
-      if (e.code === 'Escape') { state = 'modeSel'; return; }
+      if (e.code === 'Escape') { stopBGM(); state = 'modeSel'; return; }
       if (e.code === 'Enter' && player.onGround) {
         player.vy = JUMP_VY; player.onGround = false; player.jumping = true;
+        sndJump();
       }
       if (e.code === 'KeyS' && !player.chopping) {
         player.chopping = true; player.chopTimer = 0;
+        sndChop();
       }
     }
   }
@@ -229,6 +362,7 @@ function drawMushroom(mu) {
 
 // --- Enemy spawn ---
 function spawnEnemy() {
+  const hardMult = gameMode === 'hard' ? 1.35 : 1;
   const yCenter = 155 + Math.random() * 120;
   const amp = 28 + Math.random() * 55;
   const freq = 0.022 + Math.random() * 0.028;
@@ -239,17 +373,18 @@ function spawnEnemy() {
     w: 52, h: 42,
     alive: true, deathAnim: 0,
     wingPhase: Math.random() * Math.PI * 2,
-    speed: 1.19 + Math.random() * 0.42,
+    speed: (1.19 + Math.random() * 0.42) * hardMult,
   });
 }
 
 // --- Ground enemy spawn ---
 function spawnGroundEnemy() {
+  const hardMult = gameMode === 'hard' ? 1.35 : 1;
   groundEnemies.push({
     x: 830, y: GROUND, w: 36, h: 40,
     alive: true, deathAnim: 0,
     animFrame: 0, animTimer: 0,
-    speed: 1.2 + Math.random() * 0.48,
+    speed: (1.2 + Math.random() * 0.48) * hardMult,
   });
 }
 
@@ -265,37 +400,29 @@ function drawGroundEnemy(en) {
     ctx.translate(ex+18, ey+20); ctx.scale(1+t, 1-t*0.8); ctx.translate(-(ex+18), -(ey+20));
   }
   const lf = Math.sin(en.animFrame * 0.5) * 5;
-  // 影
   ctx.fillStyle = 'rgba(0,0,0,0.25)';
   ctx.beginPath(); ctx.ellipse(ex+18, GROUND+2, 14, 4, 0, 0, Math.PI*2); ctx.fill();
-  // 足
   ctx.fillStyle = '#5a1a8a';
   ctx.fillRect(ex+8,  ey+28, 7, 10); ctx.fillRect(ex+Math.round(8+lf),  ey+37, 7, 4);
   ctx.fillRect(ex+19, ey+28, 7, 10); ctx.fillRect(ex+Math.round(19-lf), ey+37, 7, 4);
   ctx.fillStyle = '#3a0a6a';
   ctx.fillRect(ex+Math.round(6+lf),  ey+40, 9, 4);
   ctx.fillRect(ex+Math.round(17-lf), ey+40, 9, 4);
-  // 胴体
   ctx.fillStyle = '#7a1a9a';
   ctx.fillRect(ex+7, ey+14, 22, 16);
-  // 腕
   ctx.fillStyle = '#7a1a9a';
   ctx.fillRect(ex+1,  ey+15, 7, 8);
   ctx.fillRect(ex+28, ey+15, 7, 8);
-  // 頭
   ctx.fillStyle = '#8a20aa';
   ctx.fillRect(ex+9, ey+2, 18, 14);
-  // 耳
   ctx.fillRect(ex+6,  ey+4, 4, 6);
   ctx.fillRect(ex+26, ey+4, 4, 6);
-  // 目（赤）
   ctx.fillStyle = '#f00';
   ctx.fillRect(ex+12, ey+6, 4, 4);
   ctx.fillRect(ex+20, ey+6, 4, 4);
   ctx.fillStyle = '#fff';
   ctx.fillRect(ex+13, ey+7, 2, 2);
   ctx.fillRect(ex+21, ey+7, 2, 2);
-  // 牙
   ctx.fillStyle = '#eee';
   ctx.fillRect(ex+13, ey+14, 3, 4);
   ctx.fillRect(ex+20, ey+14, 3, 4);
@@ -551,11 +678,11 @@ function axeBox() {
 
 // --- Update (delta time) ---
 function update(dt) {
-  const f = dt * 60; // 60fps基準の正規化係数
+  const f = dt * 60;
   frameCount++;
   difficultyTimer += f;
   elapsedFrames += f;
-  elapsedMs = performance.now() - playStartTime;
+  elapsedMs = Math.max(0, performance.now() - playStartTime);
 
   if (Math.floor(difficultyTimer / 420) > Math.floor((difficultyTimer - f) / 420)) {
     baseSpeed = 7.2;
@@ -569,21 +696,24 @@ function update(dt) {
     boostSpeed = Math.max(boostSpeed - 0.096*f, baseSpeed);
   }
   speed = boostSpeed;
-  distance += speed * 0.05 * f;
+
+  // 10m/s固定（加速なし時）
+  distance += speed / 7.2 * (10 / 60) * f;
   groundOffset += speed * f;
 
-  // 背景レイヤー移動
   layers[0].x -= speed * layers[0].spd * f;
   layers[1].x -= speed * layers[1].spd * f;
   layers[2].x -= speed * layers[2].spd * f;
 
+  if (timeBonusDisplay > 0) timeBonusDisplay -= f;
+
   if (gameMode === 'timeattack' && distance >= TA_GOAL) {
     const t = elapsedMs;
     if (bestTime === null || t < bestTime) { bestTime = t; localStorage.setItem('axeRunnerBest', t); }
+    stopBGM(); sndGoal();
     showNameInput('timeattack'); return;
   }
 
-  // 重力
   if (!player.onGround) {
     player.vy += (player.vy < 0 ? 0.79 : 0.42) * f;
     player.y += player.vy * f;
@@ -639,6 +769,7 @@ function update(dt) {
       mushrooms.splice(i, 1);
       invincible = true; invincibleEndTime = performance.now() + INVINCIBLE_DURATION_MS;
       spawnParticles(mu.x+mu.w/2, mu.y-mu.h/2, ['#c060ff','#ff88ff','#fff','#a020f0'], 16, 6);
+      sndPickup();
     }
   }
 
@@ -657,7 +788,7 @@ function update(dt) {
     if (chopActive && collidesBox(ax, ob) && ob.type === 'crate') {
       ob.alive = false; ob.breakAnim = 1;
       spawnParticles(ob.x+ob.w/2, ob.y-ob.h/2, ['#9B7220','#c8a030','#ffee88','#fff'], 16);
-      continue;
+      sndBreak(); continue;
     }
 
     const obTop = ob.y - ob.h;
@@ -670,10 +801,17 @@ function update(dt) {
       else deathReason = ob.large ? 'SMASHED BY BOULDER' : 'SMASHED BY ROCK';
     }
     if (!invincible) {
-      if (gameMode === 'normal' && (bestDistance === null || Math.floor(distance) > bestDistance)) {
-        bestDistance = Math.floor(distance); localStorage.setItem('axeRunnerBestDist', bestDistance);
+      stopBGM(); sndGameOver();
+      if (gameMode === 'normal') {
+        if (bestDistance === null || Math.floor(distance) > bestDistance) {
+          bestDistance = Math.floor(distance); localStorage.setItem('axeRunnerBestDist', bestDistance);
+        }
       }
-      if (gameMode === 'normal') { state = 'confirmSave'; return; }
+      if (gameMode === 'hard') {
+        if (bestHardDistance === null || Math.floor(distance) > bestHardDistance) {
+          bestHardDistance = Math.floor(distance); localStorage.setItem('axeRunnerHardBestDist', bestHardDistance);
+        }
+      }
       state = 'over'; return;
     }
   }
@@ -697,19 +835,31 @@ function update(dt) {
     if (chopActive && collidesBox(ax, eb)) {
       en.alive = false; en.deathAnim = 1;
       spawnParticles(en.x+15, en.screenY, ['#f44','#fa8','#ff4','#fff','#c0f'], 18, 9);
+      sndKill();
+      if (gameMode === 'timeattack') {
+        playStartTime += 1000;
+        timeBonusDisplay = 90;
+        sndTimeBonus();
+      }
       continue;
     }
     if (collidesBox(ph, ebPlayer) && !invincible) {
       deathReason = 'SLAIN BY ENEMY';
-      if (gameMode === 'normal' && (bestDistance === null || Math.floor(distance) > bestDistance)) {
-        bestDistance = Math.floor(distance); localStorage.setItem('axeRunnerBestDist', bestDistance);
+      stopBGM(); sndGameOver();
+      if (gameMode === 'normal') {
+        if (bestDistance === null || Math.floor(distance) > bestDistance) {
+          bestDistance = Math.floor(distance); localStorage.setItem('axeRunnerBestDist', bestDistance);
+        }
       }
-      if (gameMode === 'normal') { state = 'confirmSave'; return; }
+      if (gameMode === 'hard') {
+        if (bestHardDistance === null || Math.floor(distance) > bestHardDistance) {
+          bestHardDistance = Math.floor(distance); localStorage.setItem('axeRunnerHardBestDist', bestHardDistance);
+        }
+      }
       state = 'over'; return;
     }
   }
 
-  // --- 地上敵処理 ---
   for (let i = groundEnemies.length - 1; i >= 0; i--) {
     const ge = groundEnemies[i];
     if (ge.deathAnim > 0) {
@@ -725,10 +875,15 @@ function update(dt) {
     if (chopActive && collidesBox(ax, { x: ge.x+4, y: ge.y-ge.h, w: ge.w-8, h: ge.h })) {
       ge.alive = false; ge.deathAnim = 1;
       spawnParticles(ge.x+18, ge.y-ge.h/2, ['#4f0','#8f4','#fff','#af8'], 14, 8);
+      sndKill();
+      if (gameMode === 'timeattack') {
+        playStartTime += 1000;
+        timeBonusDisplay = 90;
+        sndTimeBonus();
+      }
       continue;
     }
 
-    // 踏みつけ
     const geTop = ge.y - ge.h;
     if (player.vy > 0 && (player.y - player.vy*f) <= geTop + 8 &&
         player.y >= geTop - 4 &&
@@ -736,16 +891,28 @@ function update(dt) {
       ge.alive = false; ge.deathAnim = 1;
       player.vy = JUMP_VY * 0.6; player.onGround = false; player.jumping = true;
       spawnParticles(ge.x+18, geTop, ['#4f0','#8f4','#fff','#af8'], 14, 8);
+      sndStomp();
+      if (gameMode === 'timeattack') {
+        playStartTime += 1000;
+        timeBonusDisplay = 90;
+        sndTimeBonus();
+      }
       continue;
     }
 
-    // 身体接触
     if (collidesBox(ph, { x: ge.x+10, y: ge.y, w: 16, h: ge.h }) && !invincible) {
       deathReason = 'SLAIN BY GOBLIN';
-      if (gameMode === 'normal' && (bestDistance === null || Math.floor(distance) > bestDistance)) {
-        bestDistance = Math.floor(distance); localStorage.setItem('axeRunnerBestDist', bestDistance);
+      stopBGM(); sndGameOver();
+      if (gameMode === 'normal') {
+        if (bestDistance === null || Math.floor(distance) > bestDistance) {
+          bestDistance = Math.floor(distance); localStorage.setItem('axeRunnerBestDist', bestDistance);
+        }
       }
-      if (gameMode === 'normal') { state = 'confirmSave'; return; }
+      if (gameMode === 'hard') {
+        if (bestHardDistance === null || Math.floor(distance) > bestHardDistance) {
+          bestHardDistance = Math.floor(distance); localStorage.setItem('axeRunnerHardBestDist', bestHardDistance);
+        }
+      }
       state = 'over'; return;
     }
   }
@@ -787,20 +954,29 @@ function draw() {
 
   ctx.fillStyle = 'rgba(0,0,0,0.58)'; ctx.fillRect(0, 0, 800, 38);
 
-  // 共通HUD：距離（左）
   ctx.fillStyle = '#fff'; ctx.font = 'bold 16px monospace';
   ctx.fillText(`${Math.floor(distance)}m`, 14, 25);
 
-  // タイムアタック追加表示
   if (gameMode === 'timeattack') {
     const pct = Math.min(distance/TA_GOAL, 1);
     ctx.fillStyle = '#333'; ctx.fillRect(0, 32, 800, 6);
     ctx.fillStyle = '#4fa'; ctx.fillRect(0, 32, 800*pct, 6);
     ctx.fillStyle = '#4fa'; ctx.font = 'bold 16px monospace';
-    ctx.fillText(`TIME ${formatTime(elapsedMs)}`, 290, 24);
-    if (bestTime !== null) { ctx.fillStyle = '#fa4'; ctx.fillText(`BEST ${formatTime(bestTime)}`, 530, 24); }
+    ctx.fillText(`TIME ${formatTime(elapsedMs)}`, 270, 24);
+    if (bestTime !== null) { ctx.fillStyle = '#fa4'; ctx.fillText(`BEST ${formatTime(bestTime)}`, 510, 24); }
+    if (timeBonusDisplay > 0) {
+      ctx.save();
+      ctx.globalAlpha = Math.min(1, timeBonusDisplay / 20);
+      ctx.fillStyle = '#4fa'; ctx.font = 'bold 18px monospace'; ctx.textAlign = 'center';
+      ctx.fillText('-1s ★', 400, 60);
+      ctx.textAlign = 'left';
+      ctx.restore();
+    }
+  } else if (gameMode === 'hard') {
+    if (bestHardDistance !== null) { ctx.fillStyle = '#fa4'; ctx.font = 'bold 14px monospace'; ctx.fillText(`BEST: ${bestHardDistance}m`, 510, 25); }
+    ctx.fillStyle = '#f84'; ctx.font = 'bold 13px monospace'; ctx.fillText('HARD', 720, 25);
   } else {
-    if (bestDistance !== null) { ctx.fillStyle = '#fa4'; ctx.font = 'bold 14px monospace'; ctx.fillText(`BEST: ${bestDistance}m`, 530, 25); }
+    if (bestDistance !== null) { ctx.fillStyle = '#fa4'; ctx.font = 'bold 14px monospace'; ctx.fillText(`BEST: ${bestDistance}m`, 510, 25); }
   }
 
   if (invincible) {
@@ -849,7 +1025,6 @@ function updateDemo() {
   demo.layers[1].x -= demo.spd * demo.layers[1].spd * f;
   demo.layers[2].x -= demo.spd * demo.layers[2].spd * f;
 
-  // auto jump when obstacle is close
   const nearest = demo.obs.find(o => o.alive && o.x < 220 && o.x > 80);
   if (nearest && demo.playerOnGround) {
     demo.playerVy = JUMP_VY; demo.playerOnGround = false;
@@ -934,11 +1109,9 @@ function drawDemoBg() {
     const gx=((i*42-demo.gOff*1.5)%800+1600)%800;
     ctx.beginPath(); ctx.moveTo(gx,GROUND+14); ctx.lineTo(gx+16,GROUND+14); ctx.stroke();
   }
-  // demo obstacles / enemies / mushrooms
   for (const ob of demo.obs) ob.type==='crate' ? drawCrate(ob) : drawStone(ob);
-  for (const en of demo.ens) { en.wingPhase=en.wingPhase; drawEnemy(en); }
+  for (const en of demo.ens) { drawEnemy(en); }
   for (const mu of demo.mus) drawMushroom(mu);
-  // demo player
   const savedPlayer = {...player};
   player.x=110; player.y=demo.playerY; player.h=PLAYER_H;
   player.animFrame=demo.animF; player.jumping=!demo.playerOnGround; player.chopping=false;
@@ -946,58 +1119,80 @@ function drawDemoBg() {
   Object.assign(player, savedPlayer);
 }
 
-// --- Mode select ---
+// --- Mode select (3 modes) ---
 function drawModeSelect() {
   updateDemo();
   drawDemoBg();
 
-  // 半透明オーバーレイ
   ctx.fillStyle='rgba(0,0,0,0.55)'; ctx.fillRect(0,0,800,400);
 
-  // タイトルアニメーション
   const tc0 = demo.fc;
-  const titleY = 82 + Math.sin(tc0 * 0.03) * 4;
-  ctx.font='bold 52px monospace'; ctx.textAlign='center';
+  const titleY = 78 + Math.sin(tc0 * 0.03) * 4;
+  ctx.font='bold 50px monospace'; ctx.textAlign='center';
   ctx.shadowColor = '#c060ff';
   ctx.shadowBlur = 14 + Math.sin(tc0 * 0.05) * 10;
   ctx.fillStyle = '#cc88ff';
-  ctx.fillText('3 STONE RUNNER', 400, titleY);
+  ctx.fillText('3STONE RUNNER', 400, titleY);
   ctx.shadowBlur = 0;
   ctx.fillStyle='#fff'; ctx.font='12px monospace';
-  ctx.fillText('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 400, 105);
+  ctx.fillText('━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━', 400, 100);
   ctx.fillStyle='#aaa'; ctx.font='13px monospace';
-  ctx.fillText('← → 選択   Enter: スタート', 400, 128);
+  ctx.fillText('← → 選択   Enter: スタート', 400, 120);
 
-  const nc = modeSelCursor===0;
-  ctx.fillStyle = nc?'#1a3a6e':'#0d1830';
-  ctx.strokeStyle = nc?'#4af':'#446'; ctx.lineWidth = nc?3:1;
-  ctx.fillRect(120,145,220,95); ctx.strokeRect(120,145,220,95);
-  ctx.fillStyle = nc?'#4af':'#88a'; ctx.font=`bold ${nc?22:18}px monospace`;
-  ctx.fillText('NORMAL', 230, 198);
-  ctx.fillStyle='#aaa'; ctx.font='11px monospace'; ctx.fillText('エンドレスラン', 230, 220);
+  // Panel dims: 3 panels of 240px, 14px gap/margin
+  const PW = 240, PH = 95, PY = 138;
+  const px0 = 14, px1 = 278, px2 = 542;
+  const cx0 = px0+PW/2, cx1 = px1+PW/2, cx2 = px2+PW/2;
 
-  const tc = modeSelCursor===1;
-  ctx.fillStyle = tc?'#2a1a00':'#0d1830';
-  ctx.strokeStyle = tc?'#fa4':'#446'; ctx.lineWidth = tc?3:1;
-  ctx.fillRect(460,145,220,95); ctx.strokeRect(460,145,220,95);
-  ctx.fillStyle = tc?'#fa4':'#88a'; ctx.font=`bold ${tc?22:18}px monospace`;
-  ctx.fillText('TIME ATTACK', 570, 192);
-  ctx.fillStyle='#aaa'; ctx.font='11px monospace'; ctx.fillText('1000mゴール', 570, 214);
-  if (bestTime!==null) { ctx.fillStyle='#fa4'; ctx.font='10px monospace'; ctx.fillText(`BEST: ${formatTime(bestTime)}`, 570, 230); }
+  // Normal
+  const s0 = modeSelCursor===0;
+  ctx.fillStyle = s0?'#1a3a6e':'#0d1830';
+  ctx.strokeStyle = s0?'#4af':'#446'; ctx.lineWidth = s0?3:1;
+  ctx.fillRect(px0,PY,PW,PH); ctx.strokeRect(px0,PY,PW,PH);
+  ctx.fillStyle = s0?'#4af':'#88a'; ctx.font=`bold ${s0?20:16}px monospace`; ctx.textAlign='center';
+  ctx.fillText('NORMAL', cx0, PY+42);
+  ctx.fillStyle='#aaa'; ctx.font='11px monospace';
+  ctx.fillText('エンドレスラン', cx0, PY+62);
+  if (bestDistance!==null) { ctx.fillStyle='#fa4'; ctx.font='10px monospace'; ctx.fillText(`BEST: ${bestDistance}m`, cx0, PY+80); }
 
-  ctx.fillStyle='#888'; ctx.font='12px monospace';
-  ctx.fillText('[Enter] ジャンプ   [A] ブースト   [S] 斧を振る   [Esc] ホームへ', 400, 282);
-  ctx.fillText('石 → ジャンプで飛び越える（斧では壊せない）', 400, 300);
-  ctx.fillText('木箱 → [S] で破壊できる', 400, 316);
-  ctx.fillText('空飛ぶ敵 → ジャンプか [S] で撃破', 400, 332);
-  ctx.fillText('歩く敵 → 踏みつけか [S] で撃破', 400, 348);
-  ctx.fillText('キノコ → 取ると3秒間無敵', 400, 364);
+  // Hard
+  const s1 = modeSelCursor===1;
+  ctx.fillStyle = s1?'#2a0a0a':'#0d1830';
+  ctx.strokeStyle = s1?'#f84':'#446'; ctx.lineWidth = s1?3:1;
+  ctx.fillRect(px1,PY,PW,PH); ctx.strokeRect(px1,PY,PW,PH);
+  ctx.fillStyle = s1?'#f84':'#88a'; ctx.font=`bold ${s1?20:16}px monospace`;
+  ctx.fillText('HARD', cx1, PY+38);
+  ctx.fillStyle='#aaa'; ctx.font='11px monospace';
+  ctx.fillText('ハードエンドレスラン', cx1, PY+58);
+  ctx.fillStyle='#f66'; ctx.font='10px monospace';
+  ctx.fillText('敵・障害物 多め', cx1, PY+74);
+  if (bestHardDistance!==null) { ctx.fillStyle='#fa4'; ctx.font='10px monospace'; ctx.fillText(`BEST: ${bestHardDistance}m`, cx1, PY+88); }
 
-  // Ver
+  // Time Attack
+  const s2 = modeSelCursor===2;
+  ctx.fillStyle = s2?'#2a1a00':'#0d1830';
+  ctx.strokeStyle = s2?'#fa4':'#446'; ctx.lineWidth = s2?3:1;
+  ctx.fillRect(px2,PY,PW,PH); ctx.strokeRect(px2,PY,PW,PH);
+  ctx.fillStyle = s2?'#fa4':'#88a'; ctx.font=`bold ${s2?20:16}px monospace`;
+  ctx.fillText('TIME ATTACK', cx2, PY+38);
+  ctx.fillStyle='#aaa'; ctx.font='11px monospace';
+  ctx.fillText('1000mゴール', cx2, PY+58);
+  ctx.fillStyle='#8cf'; ctx.font='10px monospace';
+  ctx.fillText('敵撃破→-1s', cx2, PY+74);
+  if (bestTime!==null) { ctx.fillStyle='#fa4'; ctx.font='10px monospace'; ctx.fillText(`BEST: ${formatTime(bestTime)}`, cx2, PY+88); }
+
+  ctx.fillStyle='#888'; ctx.font='12px monospace'; ctx.textAlign='center';
+  ctx.fillText('[Enter] ジャンプ   [A] ブースト   [S] 斧を振る   [Esc] ホームへ', 400, 270);
+  ctx.fillText('石 → ジャンプで飛び越える（斧では壊せない）', 400, 288);
+  ctx.fillText('木箱 → [S] で破壊できる', 400, 304);
+  ctx.fillText('空飛ぶ敵 → ジャンプか [S] で撃破', 400, 320);
+  ctx.fillText('歩く敵 → 踏みつけか [S] で撃破', 400, 336);
+  ctx.fillText('キノコ → 取ると3秒間無敵', 400, 352);
+
   ctx.fillStyle='#445'; ctx.font='11px monospace'; ctx.textAlign='right';
-  ctx.fillText('Ver. 1.00', 792, 392);
+  ctx.fillText('Ver. 1.1', 792, 392);
 
-  const totalRec = taRecords.length + normalRecords.length;
+  const totalRec = taRecords.length + normalRecords.length + hardRecords.length;
   ctx.fillStyle = totalRec > 0 ? '#4af' : '#446';
   ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth=1;
   ctx.strokeRect(8, 8, 148, 28);
@@ -1026,30 +1221,43 @@ function drawConfirmSave() {
 function drawOver() {
   draw();
   ctx.fillStyle='rgba(0,0,0,0.75)'; ctx.fillRect(0,0,800,400);
-  const panH = gameMode==='timeattack' ? 255 : 235;
+  const isEndless = gameMode==='normal' || gameMode==='hard';
+  const panH = gameMode==='timeattack' ? 260 : 270;
   ctx.fillStyle='#1a0a0a'; ctx.strokeStyle='#f44'; ctx.lineWidth=3;
-  ctx.fillRect(155,82,490,panH); ctx.strokeRect(155,82,490,panH);
+  ctx.fillRect(155,65,490,panH); ctx.strokeRect(155,65,490,panH);
 
   ctx.fillStyle='#f44'; ctx.font='bold 40px monospace'; ctx.textAlign='center';
-  ctx.fillText('GAME OVER', 400, 140);
+  ctx.fillText('GAME OVER', 400, 122);
   ctx.fillStyle='#fa8'; ctx.font='bold 16px monospace';
-  ctx.fillText(deathReason, 400, 170);
+  ctx.fillText(deathReason, 400, 150);
   ctx.fillStyle='#fff'; ctx.font='22px monospace';
-  ctx.fillText(`${Math.floor(distance)}m`, 400, 210);
-  ctx.fillStyle='#aaa'; ctx.font='13px monospace'; ctx.fillText('Distance', 400, 230);
+  ctx.fillText(`${Math.floor(distance)}m`, 400, 192);
+  ctx.fillStyle='#aaa'; ctx.font='13px monospace'; ctx.fillText('Distance', 400, 212);
+
   if (gameMode==='normal' && bestDistance !== null) {
     const isNew = Math.floor(distance) >= bestDistance;
     ctx.fillStyle='#fa4'; ctx.font=(isNew?'bold ':'')+'14px monospace';
-    ctx.fillText(isNew ? `★ NEW BEST! ${bestDistance}m ★` : `BEST: ${bestDistance}m`, 400, 252);
+    ctx.fillText(isNew ? `★ NEW BEST! ${bestDistance}m ★` : `BEST: ${bestDistance}m`, 400, 234);
+  }
+  if (gameMode==='hard' && bestHardDistance !== null) {
+    const isNew = Math.floor(distance) >= bestHardDistance;
+    ctx.fillStyle='#f84'; ctx.font=(isNew?'bold ':'')+'14px monospace';
+    ctx.fillText(isNew ? `★ NEW BEST! ${bestHardDistance}m ★` : `BEST: ${bestHardDistance}m`, 400, 234);
   }
   if (gameMode==='timeattack') {
     ctx.fillStyle='#8cf'; ctx.font='17px monospace';
-    ctx.fillText(`Time: ${formatTime(elapsedMs)}`, 400, 260);
+    ctx.fillText(`Time: ${formatTime(elapsedMs)}`, 400, 248);
     ctx.fillStyle='#4af'; ctx.font='14px monospace';
-    ctx.fillText('[Enter] Retry   [Esc] Home', 400, 310);
+    ctx.fillText('[Enter] Retry   [Esc] Home', 400, 298);
   } else {
+    // 記録保存ボタン
+    ctx.fillStyle='#4fa'; ctx.strokeStyle='#4fa'; ctx.lineWidth=1;
+    ctx.strokeRect(220, 248, 160, 32); ctx.fillStyle='rgba(0,50,30,0.7)'; ctx.fillRect(220,248,160,32);
+    ctx.fillStyle='#4fa'; ctx.font='bold 14px monospace';
+    ctx.fillText('[Y] 記録する', 300, 269);
+
     ctx.fillStyle='#4af'; ctx.font='14px monospace';
-    ctx.fillText('[Enter] Retry   [Esc] Home', 400, 285);
+    ctx.fillText('[Enter] Retry   [Esc] Home', 400, 308);
   }
   ctx.textAlign='left';
 }
@@ -1079,24 +1287,22 @@ function drawGoal() {
   ctx.textAlign='left';
 }
 
-// --- Records screen ---
-let confirmReset = false;
-
+// --- Records screen (3 columns) ---
 function drawRecordColumn(title, list, cx, valueFn, color) {
-  ctx.fillStyle = color; ctx.font='bold 15px monospace'; ctx.textAlign='center';
-  ctx.fillText(title, cx, 45);
+  ctx.fillStyle = color; ctx.font='bold 14px monospace'; ctx.textAlign='center';
+  ctx.fillText(title, cx, 42);
   ctx.strokeStyle = color; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(cx-160, 52); ctx.lineTo(cx+160, 52); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(cx-110, 50); ctx.lineTo(cx+110, 50); ctx.stroke();
   if (list.length === 0) {
-    ctx.fillStyle='#555'; ctx.font='13px monospace'; ctx.fillText('記録なし', cx, 200);
+    ctx.fillStyle='#555'; ctx.font='12px monospace'; ctx.fillText('記録なし', cx, 190);
   } else {
-    list.slice(0, 10).forEach((r, i) => {
-      const y = 72 + i * 30;
+    list.slice(0, 8).forEach((r, i) => {
+      const y = 68 + i * 34;
       ctx.fillStyle = i===0 ? '#fa4' : i===1 ? '#bbb' : i===2 ? '#c84' : '#778';
-      ctx.font = i===0 ? 'bold 14px monospace' : '13px monospace';
-      ctx.textAlign='right'; ctx.fillText(`${i+1}.`, cx-100, y);
-      ctx.textAlign='left';  ctx.fillText(r.name, cx-90, y);
-      ctx.textAlign='right'; ctx.fillText(valueFn(r), cx+155, y);
+      ctx.font = i===0 ? 'bold 13px monospace' : '12px monospace';
+      ctx.textAlign='right'; ctx.fillText(`${i+1}.`, cx-90, y);
+      ctx.textAlign='left';  ctx.fillText(r.name.slice(0,10), cx-82, y);
+      ctx.textAlign='right'; ctx.fillText(valueFn(r), cx+108, y);
     });
   }
 }
@@ -1106,26 +1312,17 @@ function drawRecords() {
   g.addColorStop(0,'#0d1b3e'); g.addColorStop(1,'#1a3a6e');
   ctx.fillStyle=g; ctx.fillRect(0,0,800,400);
 
-  // 区切り線
+  // 縦区切り
   ctx.strokeStyle='#334'; ctx.lineWidth=1;
-  ctx.beginPath(); ctx.moveTo(400,15); ctx.lineTo(400,390); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(267,10); ctx.lineTo(267,385); ctx.stroke();
+  ctx.beginPath(); ctx.moveTo(533,10); ctx.lineTo(533,385); ctx.stroke();
 
-  // 左：ノーマル、右：タイムアタック
-  drawRecordColumn('NORMAL', normalRecords, 200, r=>`${r.dist}m`, '#4fa');
-  drawRecordColumn('TIME ATTACK', taRecords, 600, r=>formatTime(r.ms), '#4af');
+  drawRecordColumn('NORMAL',      normalRecords, 133, r=>`${r.dist}m`,       '#4fa');
+  drawRecordColumn('HARD',        hardRecords,   400, r=>`${r.dist}m`,       '#f84');
+  drawRecordColumn('TIME ATTACK', taRecords,     667, r=>formatTime(r.ms),   '#4af');
 
   ctx.fillStyle='#444'; ctx.font='11px monospace'; ctx.textAlign='center';
-  ctx.fillText('[Esc] 戻る   [Del] 全記録リセット', 400, 385);
-
-  if (confirmReset) {
-    ctx.fillStyle='rgba(0,0,0,0.80)'; ctx.fillRect(0,0,800,400);
-    ctx.fillStyle='#1a0a0a'; ctx.strokeStyle='#f44'; ctx.lineWidth=3;
-    ctx.fillRect(220,155,360,100); ctx.strokeRect(220,155,360,100);
-    ctx.fillStyle='#fff'; ctx.font='bold 16px monospace'; ctx.textAlign='center';
-    ctx.fillText('全記録を削除しますか？', 400, 198);
-    ctx.fillStyle='#4fa'; ctx.font='14px monospace';
-    ctx.fillText('[Y] はい　　[N] いいえ', 400, 232);
-  }
+  ctx.fillText('[Esc] 戻る   [Del] 全記録リセット（要パスワード）', 400, 395);
   ctx.textAlign='left';
 }
 
@@ -1138,7 +1335,6 @@ function loop(timestamp) {
   else if (state==='play') { update(dt); draw(); }
   else if (state==='over') { drawOver(); }
   else if (state==='goal' || state==='nameinput') { frameCount++; drawGoal(); }
-  else if (state==='confirmSave') { drawConfirmSave(); }
   else if (state==='records') { drawRecords(); }
   prevKeys={...keys};
   requestAnimationFrame(loop);
