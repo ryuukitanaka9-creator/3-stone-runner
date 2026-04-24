@@ -51,7 +51,6 @@ const GROUND = 320;
 const PLAYER_H = 48;
 const JUMP_VY = -15;
 const TA_GOAL = 1000;
-const PW_DELETE = '3STONE';
 
 let keys = {}, prevKeys = {};
 let state = 'modeSel';
@@ -84,56 +83,16 @@ let normalRecords = JSON.parse(localStorage.getItem('axeRunnerNormalRecords') ||
 let hardRecords = JSON.parse(localStorage.getItem('axeRunnerHardRecords') || '[]');
 let pendingRecordMode = '';
 
-// =====================================================
-// Firebase 設定 — Firebase Consoleからコピーして貼り付けてください
-// =====================================================
-const firebaseConfig = {
-  apiKey:            "YOUR_API_KEY",
-  authDomain:        "YOUR_PROJECT_ID.firebaseapp.com",
-  projectId:         "YOUR_PROJECT_ID",
-  storageBucket:     "YOUR_PROJECT_ID.appspot.com",
-  messagingSenderId: "YOUR_SENDER_ID",
-  appId:             "YOUR_APP_ID"
-};
-// =====================================================
-
-let db = null, fbReady = false;
-try {
-  firebase.initializeApp(firebaseConfig);
-  db = firebase.firestore();
-} catch(e) { console.warn('Firebase init failed:', e); }
-
-async function loadRecords() {
-  if (!db) return;
-  try {
-    const [nd, hd, td] = await Promise.all([
-      db.collection('leaderboard').doc('normal').get(),
-      db.collection('leaderboard').doc('hard').get(),
-      db.collection('leaderboard').doc('timeattack').get(),
-    ]);
-    if (nd.exists) normalRecords = nd.data().records || [];
-    if (hd.exists) hardRecords   = hd.data().records || [];
-    if (td.exists) taRecords     = td.data().records || [];
-    ['axeRunnerNormalRecords','axeRunnerHardRecords','axeRunnerRecords']
-      .forEach((k,i) => localStorage.setItem(k, JSON.stringify([normalRecords,hardRecords,taRecords][i])));
-    fbReady = true;
-  } catch(e) { console.warn('Firestore load failed, using localStorage:', e); }
+const LS_KEYS = ['axeRunnerNormalRecords','axeRunnerHardRecords','axeRunnerRecords'];
+function syncRecords(col) {
+  localStorage.setItem(LS_KEYS[col], JSON.stringify([normalRecords,hardRecords,taRecords][col]));
 }
-loadRecords();
 
-const FS_DOCS  = ['normal','hard','timeattack'];
-const LS_KEYS  = ['axeRunnerNormalRecords','axeRunnerHardRecords','axeRunnerRecords'];
-async function syncRecords(col) {
-  const list = [normalRecords, hardRecords, taRecords][col];
-  localStorage.setItem(LS_KEYS[col], JSON.stringify(list));
-  if (!fbReady || !db) return;
-  try { await db.collection('leaderboard').doc(FS_DOCS[col]).set({ records: list }); }
-  catch(e) { console.warn('Firestore sync failed:', e); }
-}
-async function clearAllFirestore() {
-  if (!fbReady || !db) return;
-  try { await Promise.all(FS_DOCS.map(d => db.collection('leaderboard').doc(d).set({ records: [] }))); }
-  catch(e) { console.warn('Firestore clear failed:', e); }
+// パスワードはSHA-256ハッシュで比較（平文は保持しない）
+const PW_HASH = '4f7f7c3068ae5760a3bf4df65fa2ab6da7c853cf0f9134d48072f2ec8fc8e79d';
+async function hashStr(str) {
+  const buf = await crypto.subtle.digest('SHA-256', new TextEncoder().encode(str));
+  return Array.from(new Uint8Array(buf)).map(b => b.toString(16).padStart(2,'0')).join('');
 }
 
 // --- Audio ---
@@ -264,8 +223,9 @@ function showPasswordInput(mode) {
   pwOverlay.style.display = 'block';
   setTimeout(() => pwInput.focus(), 50);
 }
-function submitPassword() {
-  if (pwInput.value === PW_DELETE) {
+async function submitPassword() {
+  const h = await hashStr(pwInput.value);
+  if (h === PW_HASH) {
     pwOverlay.style.display = 'none';
     pwInput.value = '';
     if (pwMode === 'deleteOne') {
@@ -301,7 +261,6 @@ function resetAllRecords() {
   bestTime = null; bestDistance = null; bestHardDistance = null;
   LS_KEYS.forEach(k => localStorage.removeItem(k));
   ['axeRunnerBest','axeRunnerBestDist','axeRunnerHardBestDist'].forEach(k => localStorage.removeItem(k));
-  clearAllFirestore();
 }
 
 const layers = [
@@ -1312,28 +1271,13 @@ function drawModeSelect() {
   ctx.fillText('キノコ → 取ると3秒間無敵', 400, 352);
 
   ctx.fillStyle='#445'; ctx.font='11px monospace'; ctx.textAlign='right';
-  ctx.fillText('Ver. 2.1', 792, 392);
+  ctx.fillText('Ver. 2.2', 792, 392);
 
   ctx.fillStyle = '#4af'; ctx.strokeStyle = '#4af'; ctx.lineWidth=1;
   ctx.strokeRect(8, 8, 100, 28);
   ctx.font='13px monospace'; ctx.textAlign='center';
   ctx.fillText('記録 [R]', 58, 27);
 
-  ctx.textAlign='left';
-}
-
-// --- Confirm save ---
-function drawConfirmSave() {
-  draw();
-  ctx.fillStyle='rgba(0,0,0,0.75)'; ctx.fillRect(0,0,800,400);
-  ctx.fillStyle='#0d1830'; ctx.strokeStyle='#4af'; ctx.lineWidth=3;
-  ctx.fillRect(220,150,360,110); ctx.strokeRect(220,150,360,110);
-  ctx.fillStyle='#fff'; ctx.font='bold 17px monospace'; ctx.textAlign='center';
-  ctx.fillText('記録しますか？', 400, 190);
-  ctx.fillStyle='#aaa'; ctx.font='13px monospace';
-  ctx.fillText(`距離: ${Math.floor(distance)}m`, 400, 215);
-  ctx.fillStyle='#4fa'; ctx.font='bold 14px monospace';
-  ctx.fillText('[Y] はい　　[N] いいえ', 400, 245);
   ctx.textAlign='left';
 }
 
