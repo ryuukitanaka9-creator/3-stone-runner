@@ -71,6 +71,7 @@ let gEnemySpawnBaseInterval = 280, gEnemyNextSpawnIn = 280, gEnemySpawnTimer = 0
 let deathReason = '';
 let lastTime = 0;
 let timeBonusDisplay = 0;
+let recordDecided = false;
 
 let bestTime = localStorage.getItem('axeRunnerBest') ? Number(localStorage.getItem('axeRunnerBest')) : null;
 let bestDistance = localStorage.getItem('axeRunnerBestDist') ? Number(localStorage.getItem('axeRunnerBestDist')) : null;
@@ -171,6 +172,7 @@ function submitName() {
   }
   nameOverlay.style.display = 'none';
   nameInput.value = '';
+  if (pendingRecordMode !== 'timeattack') recordDecided = true;
   state = pendingRecordMode === 'timeattack' ? 'goal' : 'over';
 }
 
@@ -257,6 +259,7 @@ function resetGame() {
   obstacles = []; enemies = []; groundEnemies = []; mushrooms = []; particles = [];
   invincible = false; invincibleTimer = 0; invincibleEndTime = 0; nextMushroomDist = 480 + Math.random()*40;
   timeBonusDisplay = 0;
+  recordDecided = false;
   deathReason = '';
 
   if (gameMode === 'hard') {
@@ -301,11 +304,15 @@ document.addEventListener('keydown', e => {
       if (e.code === 'Delete') showPasswordInput();
     }
     if (state === 'over' || state === 'goal') {
-      if (e.code === 'Enter') { resetGame(); state = 'play'; startBGM(); }
-      if (e.code === 'Escape') state = 'modeSel';
-      if (state === 'over' && (gameMode === 'normal' || gameMode === 'hard') && e.code === 'KeyY') {
-        showNameInput(gameMode);
+      const isEndless = gameMode === 'normal' || gameMode === 'hard';
+      if (state === 'over' && isEndless) {
+        if (e.code === 'KeyY') { showNameInput(gameMode); }
+        if (e.code === 'KeyN') { recordDecided = true; }
+        if (e.code === 'Enter' && recordDecided) { resetGame(); state = 'play'; startBGM(); }
+      } else {
+        if (e.code === 'Enter') { resetGame(); state = 'play'; startBGM(); }
       }
+      if (e.code === 'Escape') state = 'modeSel';
     }
     if (state === 'play') {
       if (e.code === 'Escape') { stopBGM(); state = 'modeSel'; return; }
@@ -1250,14 +1257,26 @@ function drawOver() {
     ctx.fillStyle='#4af'; ctx.font='14px monospace';
     ctx.fillText('[Enter] Retry   [Esc] Home', 400, 298);
   } else {
-    // 記録保存ボタン
-    ctx.fillStyle='#4fa'; ctx.strokeStyle='#4fa'; ctx.lineWidth=1;
-    ctx.strokeRect(220, 248, 160, 32); ctx.fillStyle='rgba(0,50,30,0.7)'; ctx.fillRect(220,248,160,32);
-    ctx.fillStyle='#4fa'; ctx.font='bold 14px monospace';
-    ctx.fillText('[Y] 記録する', 300, 269);
+    if (!recordDecided) {
+      // Y/N 選択を促す
+      ctx.fillStyle='#4fa'; ctx.strokeStyle='#4fa'; ctx.lineWidth=1;
+      ctx.strokeRect(192, 248, 140, 32); ctx.fillStyle='rgba(0,50,30,0.7)'; ctx.fillRect(192,248,140,32);
+      ctx.fillStyle='#4fa'; ctx.font='bold 14px monospace';
+      ctx.fillText('[Y] 記録する', 262, 269);
 
-    ctx.fillStyle='#4af'; ctx.font='14px monospace';
-    ctx.fillText('[Enter] Retry   [Esc] Home', 400, 308);
+      ctx.fillStyle='#f84'; ctx.strokeStyle='#f84'; ctx.lineWidth=1;
+      ctx.strokeRect(352, 248, 140, 32); ctx.fillStyle='rgba(50,20,0,0.7)'; ctx.fillRect(352,248,140,32);
+      ctx.fillStyle='#f84'; ctx.font='bold 14px monospace';
+      ctx.fillText('[N] スキップ', 422, 269);
+
+      ctx.fillStyle='#444'; ctx.font='13px monospace';
+      ctx.fillText('[Enter] Retry   [Esc] Home', 400, 308);
+    } else {
+      ctx.fillStyle='#f84'; ctx.font='13px monospace';
+      ctx.fillText('スキップしました', 400, 262);
+      ctx.fillStyle='#4af'; ctx.font='14px monospace';
+      ctx.fillText('[Enter] Retry   [Esc] Home', 400, 300);
+    }
   }
   ctx.textAlign='left';
 }
