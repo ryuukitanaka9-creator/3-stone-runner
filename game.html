@@ -73,7 +73,8 @@ let lastTime = 0;
 let timeBonusDisplay = 0;
 let recordDecided = false;
 let isNewBest = false;
-let recCol = 0, recRow = 0, recConfirmDel = false;
+let recCol = 0, recRow = 0;
+let adminMode = false, pwMode = '', pendingDelCol = 0, pendingDelRow = 0;
 
 let bestTime = localStorage.getItem('axeRunnerBest') ? Number(localStorage.getItem('axeRunnerBest')) : null;
 let bestDistance = localStorage.getItem('axeRunnerBestDist') ? Number(localStorage.getItem('axeRunnerBestDist')) : null;
@@ -156,20 +157,30 @@ nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitName()
 
 function submitName() {
   const name = nameInput.value.trim() || '名無し';
+  if (pendingRecordMode === 'rename') {
+    const lists = [normalRecords, hardRecords, taRecords];
+    const lsKeys = ['axeRunnerNormalRecords', 'axeRunnerHardRecords', 'axeRunnerRecords'];
+    lists[pendingDelCol][pendingDelRow].name = name;
+    localStorage.setItem(lsKeys[pendingDelCol], JSON.stringify(lists[pendingDelCol]));
+    nameOverlay.style.display = 'none';
+    nameInput.value = '';
+    state = 'records';
+    return;
+  }
   if (pendingRecordMode === 'timeattack') {
     taRecords.push({ name, ms: elapsedMs });
     taRecords.sort((a,b) => a.ms - b.ms);
-    if (taRecords.length > 20) taRecords.length = 20;
+    if (taRecords.length > 50) taRecords.length = 50;
     localStorage.setItem('axeRunnerRecords', JSON.stringify(taRecords));
   } else if (pendingRecordMode === 'hard') {
     hardRecords.push({ name, dist: Math.floor(distance) });
     hardRecords.sort((a,b) => b.dist - a.dist);
-    if (hardRecords.length > 20) hardRecords.length = 20;
+    if (hardRecords.length > 50) hardRecords.length = 50;
     localStorage.setItem('axeRunnerHardRecords', JSON.stringify(hardRecords));
   } else {
     normalRecords.push({ name, dist: Math.floor(distance) });
     normalRecords.sort((a,b) => b.dist - a.dist);
-    if (normalRecords.length > 20) normalRecords.length = 20;
+    if (normalRecords.length > 50) normalRecords.length = 50;
     localStorage.setItem('axeRunnerNormalRecords', JSON.stringify(normalRecords));
   }
   nameOverlay.style.display = 'none';
@@ -180,6 +191,7 @@ function submitName() {
 
 function showNameInput(mode) {
   pendingRecordMode = mode;
+  document.querySelector('#nameOverlay p').textContent = mode === 'rename' ? '名前を変更してください' : '名前を入力してください';
   state = 'nameinput';
   nameOverlay.style.display = 'block';
   setTimeout(() => nameInput.focus(), 50);
@@ -193,17 +205,27 @@ document.getElementById('pwOk').addEventListener('click', submitPassword);
 document.getElementById('pwCancel').addEventListener('click', cancelPassword);
 pwInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitPassword(); e.stopPropagation(); });
 
-function showPasswordInput() {
+const pwTitle = document.querySelector('#pwOverlay .pwTitle');
+function showPasswordInput(mode) {
+  pwMode = mode;
   pwError.textContent = '';
   pwInput.value = '';
+  pwTitle.textContent = mode === 'admin' ? '管理者パスワードを入力' : '削除パスワードを入力';
   pwOverlay.style.display = 'block';
   setTimeout(() => pwInput.focus(), 50);
 }
 function submitPassword() {
   if (pwInput.value === PW_DELETE) {
-    resetAllRecords();
     pwOverlay.style.display = 'none';
     pwInput.value = '';
+    if (pwMode === 'deleteOne') {
+      deleteSelectedRecord(pendingDelCol, pendingDelRow);
+    } else if (pwMode === 'admin') {
+      adminMode = true;
+      recRow = 0;
+    } else if (pwMode === 'deleteAll') {
+      resetAllRecords();
+    }
   } else {
     pwError.textContent = 'パスワードが違います';
     pwInput.value = '';
@@ -215,13 +237,13 @@ function cancelPassword() {
   pwInput.value = '';
 }
 
-function deleteSelectedRecord() {
+function deleteSelectedRecord(col, row) {
   const lists = [normalRecords, hardRecords, taRecords];
-  const keys  = ['axeRunnerNormalRecords', 'axeRunnerHardRecords', 'axeRunnerRecords'];
-  const list  = lists[recCol];
-  if (recRow < list.length) {
-    list.splice(recRow, 1);
-    localStorage.setItem(keys[recCol], JSON.stringify(list));
+  const lsKeys = ['axeRunnerNormalRecords', 'axeRunnerHardRecords', 'axeRunnerRecords'];
+  const list = lists[col];
+  if (row < list.length) {
+    list.splice(row, 1);
+    localStorage.setItem(lsKeys[col], JSON.stringify(list));
     recRow = Math.max(0, Math.min(recRow, list.length - 1));
   }
 }
@@ -274,7 +296,7 @@ function resetGame() {
   timeBonusDisplay = 0;
   recordDecided = false;
   isNewBest = false;
-  recCol = 0; recRow = 0; recConfirmDel = false;
+  recCol = 0; recRow = 0; adminMode = false;
   deathReason = '';
 
   if (gameMode === 'hard') {
@@ -315,28 +337,41 @@ document.addEventListener('keydown', e => {
       if (e.code === 'KeyR') state = 'records';
     }
     if (state === 'records') {
-      if (recConfirmDel) {
-        if (e.code === 'KeyY') { deleteSelectedRecord(); recConfirmDel = false; }
-        if (e.code === 'KeyN' || e.code === 'Escape') recConfirmDel = false;
-      } else {
-        if (e.code === 'Escape') state = 'modeSel';
-        if (e.code === 'ArrowLeft')  { recCol = (recCol + 2) % 3; recRow = 0; }
-        if (e.code === 'ArrowRight') { recCol = (recCol + 1) % 3; recRow = 0; }
-        if (e.code === 'ArrowUp')    recRow = Math.max(0, recRow - 1);
-        if (e.code === 'ArrowDown') {
-          const len = [normalRecords, hardRecords, taRecords][recCol].length;
-          recRow = Math.min(Math.min(7, len - 1), recRow + 1);
+      if (e.code === 'Escape') { adminMode = false; state = 'modeSel'; }
+      if (e.code === 'ArrowLeft')  { recCol = (recCol + 2) % 3; recRow = 0; }
+      if (e.code === 'ArrowRight') { recCol = (recCol + 1) % 3; recRow = 0; }
+      if (e.code === 'ArrowUp')   recRow = Math.max(0, recRow - 1);
+      if (e.code === 'ArrowDown') {
+        const list = [normalRecords, hardRecords, taRecords][recCol];
+        const maxRow = adminMode ? Math.min(49, list.length - 1) : Math.min(9, list.length - 1);
+        recRow = Math.min(maxRow, recRow + 1);
+      }
+      if (e.code === 'Delete') {
+        const list = [normalRecords, hardRecords, taRecords][recCol];
+        if (list.length > 0 && recRow < list.length) {
+          pendingDelCol = recCol; pendingDelRow = recRow;
+          showPasswordInput('deleteOne');
         }
-        if (e.code === 'Delete') {
-          const list = [normalRecords, hardRecords, taRecords][recCol];
-          if (list.length > 0 && recRow < list.length) recConfirmDel = true;
+      }
+      if (e.code === 'KeyA' && !adminMode) showPasswordInput('admin');
+      if (e.code === 'KeyA' && adminMode) adminMode = false;
+      if (e.code === 'KeyE' && adminMode) {
+        const list = [normalRecords, hardRecords, taRecords][recCol];
+        if (list.length > 0 && recRow < list.length) {
+          pendingDelCol = recCol; pendingDelRow = recRow;
+          nameInput.value = list[recRow].name;
+          showNameInput('rename');
         }
       }
     }
     if (state === 'over' || state === 'goal') {
       const isEndless = gameMode === 'normal' || gameMode === 'hard';
       if (state === 'over' && isEndless) {
-        if (e.code === 'KeyY') { showNameInput(gameMode); }
+        if (e.code === 'KeyY') {
+          const curList = gameMode === 'hard' ? hardRecords : normalRecords;
+          if (curList.length >= 50) { recordDecided = true; }
+          else { showNameInput(gameMode); }
+        }
         if (e.code === 'KeyN' && !isNewBest) { recordDecided = true; }
         if (e.code === 'Enter' && recordDecided) { resetGame(); state = 'play'; startBGM(); }
       } else {
@@ -748,6 +783,7 @@ function update(dt) {
     const t = elapsedMs;
     if (bestTime === null || t < bestTime) { bestTime = t; localStorage.setItem('axeRunnerBest', t); }
     stopBGM(); sndGoal();
+    if (taRecords.length >= 50) { state = 'goal'; return; }
     showNameInput('timeattack'); return;
   }
 
@@ -1011,10 +1047,14 @@ function draw() {
     }
   } else if (gameMode === 'hard') {
     if (bestHardDistance !== null) { ctx.fillStyle = '#fa4'; ctx.font = 'bold 14px monospace'; ctx.fillText(`BEST: ${bestHardDistance}m`, 510, 25); }
-    ctx.fillStyle = '#f84'; ctx.font = 'bold 13px monospace'; ctx.fillText('HARD', 720, 25);
   } else {
     if (bestDistance !== null) { ctx.fillStyle = '#fa4'; ctx.font = 'bold 14px monospace'; ctx.fillText(`BEST: ${bestDistance}m`, 510, 25); }
   }
+  // Mode label top-right
+  { const modeLabel = gameMode === 'timeattack' ? 'T.ATTACK' : gameMode.toUpperCase();
+    const modeColor = gameMode === 'normal' ? '#4af' : gameMode === 'hard' ? '#f84' : '#fa4';
+    ctx.fillStyle = modeColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
+    ctx.fillText(modeLabel, 792, 25); ctx.textAlign = 'left'; }
 
   if (invincible) {
     ctx.fillStyle = `rgba(192,96,255,${0.8+0.2*Math.sin(frameCount*0.15)})`;
@@ -1227,14 +1267,12 @@ function drawModeSelect() {
   ctx.fillText('キノコ → 取ると3秒間無敵', 400, 352);
 
   ctx.fillStyle='#445'; ctx.font='11px monospace'; ctx.textAlign='right';
-  ctx.fillText('Ver. 1.1', 792, 392);
+  ctx.fillText('Ver. 2.1', 792, 392);
 
-  const totalRec = taRecords.length + normalRecords.length + hardRecords.length;
-  ctx.fillStyle = totalRec > 0 ? '#4af' : '#446';
-  ctx.strokeStyle = ctx.fillStyle; ctx.lineWidth=1;
-  ctx.strokeRect(8, 8, 148, 28);
+  ctx.fillStyle = '#4af'; ctx.strokeStyle = '#4af'; ctx.lineWidth=1;
+  ctx.strokeRect(8, 8, 100, 28);
   ctx.font='13px monospace'; ctx.textAlign='center';
-  ctx.fillText(totalRec > 0 ? `記録 [R]  ${totalRec}件` : '記録 [R]', 82, 27);
+  ctx.fillText('記録 [R]', 58, 27);
 
   ctx.textAlign='left';
 }
@@ -1287,8 +1325,17 @@ function drawOver() {
     ctx.fillStyle='#4af'; ctx.font='14px monospace';
     ctx.fillText('[Enter] Retry   [Esc] Home', 400, 298);
   } else {
+    const curListFull = (gameMode === 'hard' ? hardRecords : normalRecords).length >= 50;
     if (!recordDecided) {
-      if (isNewBest) {
+      if (curListFull) {
+        ctx.fillStyle='#f44'; ctx.font='bold 13px monospace';
+        ctx.fillText('記録上限(50件)に達しています', 400, 252);
+        ctx.fillStyle='#555'; ctx.font='12px monospace';
+        ctx.fillText('管理者モードで削除してください', 400, 272);
+        ctx.fillStyle='#4af'; ctx.font='14px monospace';
+        ctx.fillText('[Enter] Retry   [Esc] Home', 400, 308);
+        if (!recordDecided) recordDecided = true;
+      } else if (isNewBest) {
         // NEW BEST: [Y]のみ、必ず記録
         ctx.fillStyle='#ff4'; ctx.font='bold 13px monospace';
         ctx.fillText('★ NEW BEST! 記録してください', 400, 244);
@@ -1348,30 +1395,41 @@ function drawGoal() {
 // --- Records screen (3 columns) ---
 function drawRecordColumn(title, list, cx, valueFn, color, colIdx) {
   const isActiveCol = recCol === colIdx;
+  const maxShow = adminMode ? 50 : 10;
+  const rowH = adminMode ? 7 : 28;
+  const startY = adminMode ? 58 : 64;
+  const fSize = adminMode ? 9 : 12;
+
   ctx.fillStyle = isActiveCol ? '#fff' : color;
   ctx.font = isActiveCol ? 'bold 15px monospace' : 'bold 14px monospace';
   ctx.textAlign='center';
   ctx.fillText(title, cx, 42);
   ctx.strokeStyle = color; ctx.lineWidth = isActiveCol ? 2 : 1;
   ctx.beginPath(); ctx.moveTo(cx-110, 50); ctx.lineTo(cx+110, 50); ctx.stroke();
+
   if (list.length === 0) {
     ctx.fillStyle='#555'; ctx.font='12px monospace'; ctx.fillText('記録なし', cx, 190);
   } else {
-    list.slice(0, 8).forEach((r, i) => {
-      const y = 68 + i * 34;
+    list.slice(0, maxShow).forEach((r, i) => {
+      const y = startY + i * rowH;
       const isSel = isActiveCol && i === recRow;
       if (isSel) {
-        ctx.fillStyle = 'rgba(255,255,255,0.12)';
-        ctx.fillRect(cx-115, y-18, 228, 26);
+        ctx.fillStyle = 'rgba(255,255,255,0.14)';
+        ctx.fillRect(cx-112, y-rowH*0.65, 222, rowH);
         ctx.strokeStyle = color; ctx.lineWidth=1;
-        ctx.strokeRect(cx-115, y-18, 228, 26);
+        ctx.strokeRect(cx-112, y-rowH*0.65, 222, rowH);
       }
-      ctx.fillStyle = isSel ? '#fff' : (i===0 ? '#fa4' : i===1 ? '#bbb' : i===2 ? '#c84' : '#778');
-      ctx.font = (i===0 || isSel) ? 'bold 13px monospace' : '12px monospace';
+      const rankColor = isSel ? '#fff' : (i===0 ? '#fa4' : i===1 ? '#bbb' : i===2 ? '#c84' : i < 10 ? '#778' : '#556');
+      ctx.fillStyle = rankColor;
+      ctx.font = (isSel ? 'bold ' : '') + `${fSize}px monospace`;
       ctx.textAlign='right'; ctx.fillText(`${i+1}.`, cx-90, y);
-      ctx.textAlign='left';  ctx.fillText(r.name.slice(0,10), cx-82, y);
+      ctx.textAlign='left';  ctx.fillText(r.name.slice(0, adminMode?8:10), cx-82, y);
       ctx.textAlign='right'; ctx.fillText(valueFn(r), cx+108, y);
     });
+    if (!adminMode && list.length > 10) {
+      ctx.fillStyle='#445'; ctx.font='10px monospace'; ctx.textAlign='center';
+      ctx.fillText(`+${list.length - 10}件 (管理者モードで表示)`, cx, startY + 10*rowH + 4);
+    }
   }
 }
 
@@ -1389,17 +1447,15 @@ function drawRecords() {
   drawRecordColumn('HARD',        hardRecords,   400, r=>`${r.dist}m`,     '#f84', 1);
   drawRecordColumn('TIME ATTACK', taRecords,     667, r=>formatTime(r.ms), '#4af', 2);
 
-  ctx.fillStyle='#444'; ctx.font='11px monospace'; ctx.textAlign='center';
-  ctx.fillText('← → 列選択   ↑ ↓ 行選択   [Del] 削除   [Esc] 戻る', 400, 393);
-
-  if (recConfirmDel) {
-    ctx.fillStyle='rgba(0,0,0,0.82)'; ctx.fillRect(0,0,800,400);
-    ctx.fillStyle='#1a0a0a'; ctx.strokeStyle='#f44'; ctx.lineWidth=2;
-    ctx.fillRect(250,160,300,90); ctx.strokeRect(250,160,300,90);
-    ctx.fillStyle='#fff'; ctx.font='bold 15px monospace'; ctx.textAlign='center';
-    ctx.fillText('この記録を削除しますか？', 400, 198);
-    ctx.fillStyle='#4fa'; ctx.font='bold 14px monospace';
-    ctx.fillText('[Y] 削除   [N] キャンセル', 400, 230);
+  if (adminMode) {
+    ctx.fillStyle='rgba(255,80,0,0.18)'; ctx.fillRect(0,0,800,400);
+    ctx.fillStyle='#f84'; ctx.font='bold 11px monospace'; ctx.textAlign='right';
+    ctx.fillText('ADMIN MODE  [A] 終了', 795, 14);
+    ctx.fillStyle='#555'; ctx.font='11px monospace'; ctx.textAlign='center';
+    ctx.fillText('← → 列選択   ↑ ↓ 行選択   [Del] 削除   [E] 名前変更   [A] 終了   [Esc] 戻る', 400, 396);
+  } else {
+    ctx.fillStyle='#444'; ctx.font='11px monospace'; ctx.textAlign='center';
+    ctx.fillText('← → 列選択   ↑ ↓ 行選択   [Del] 削除（PW必須）   [A] 管理者   [Esc] 戻る', 400, 396);
   }
   ctx.textAlign='left';
 }
@@ -1412,7 +1468,8 @@ function loop(timestamp) {
   if (state==='modeSel') { drawModeSelect(); }
   else if (state==='play') { update(dt); draw(); }
   else if (state==='over') { drawOver(); }
-  else if (state==='goal' || state==='nameinput') { frameCount++; drawGoal(); }
+  else if (state==='goal') { frameCount++; drawGoal(); }
+  else if (state==='nameinput') { frameCount++; if (pendingRecordMode === 'rename') drawRecords(); else drawGoal(); }
   else if (state==='records') { drawRecords(); }
   prevKeys={...keys};
   requestAnimationFrame(loop);
