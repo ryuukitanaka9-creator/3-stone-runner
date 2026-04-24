@@ -84,6 +84,12 @@ let normalRecords = JSON.parse(localStorage.getItem('axeRunnerNormalRecords') ||
 let hardRecords = JSON.parse(localStorage.getItem('axeRunnerHardRecords') || '[]');
 let pendingRecordMode = '';
 
+const LS_KEYS = ['axeRunnerNormalRecords','axeRunnerHardRecords','axeRunnerRecords'];
+function syncRecords(col) {
+  const list = [normalRecords, hardRecords, taRecords][col];
+  localStorage.setItem(LS_KEYS[col], JSON.stringify(list));
+}
+
 // --- Audio ---
 const AudioCtx = window.AudioContext || window.webkitAudioContext;
 let audioCtx = null;
@@ -158,10 +164,8 @@ nameInput.addEventListener('keydown', e => { if (e.key === 'Enter') submitName()
 function submitName() {
   const name = nameInput.value.trim() || '名無し';
   if (pendingRecordMode === 'rename') {
-    const lists = [normalRecords, hardRecords, taRecords];
-    const lsKeys = ['axeRunnerNormalRecords', 'axeRunnerHardRecords', 'axeRunnerRecords'];
-    lists[pendingDelCol][pendingDelRow].name = name;
-    localStorage.setItem(lsKeys[pendingDelCol], JSON.stringify(lists[pendingDelCol]));
+    [normalRecords, hardRecords, taRecords][pendingDelCol][pendingDelRow].name = name;
+    syncRecords(pendingDelCol);
     nameOverlay.style.display = 'none';
     nameInput.value = '';
     state = 'records';
@@ -171,17 +175,17 @@ function submitName() {
     taRecords.push({ name, ms: elapsedMs });
     taRecords.sort((a,b) => a.ms - b.ms);
     if (taRecords.length > 50) taRecords.length = 50;
-    localStorage.setItem('axeRunnerRecords', JSON.stringify(taRecords));
+    syncRecords(2);
   } else if (pendingRecordMode === 'hard') {
     hardRecords.push({ name, dist: Math.floor(distance) });
     hardRecords.sort((a,b) => b.dist - a.dist);
     if (hardRecords.length > 50) hardRecords.length = 50;
-    localStorage.setItem('axeRunnerHardRecords', JSON.stringify(hardRecords));
+    syncRecords(1);
   } else {
     normalRecords.push({ name, dist: Math.floor(distance) });
     normalRecords.sort((a,b) => b.dist - a.dist);
     if (normalRecords.length > 50) normalRecords.length = 50;
-    localStorage.setItem('axeRunnerNormalRecords', JSON.stringify(normalRecords));
+    syncRecords(0);
   }
   nameOverlay.style.display = 'none';
   nameInput.value = '';
@@ -238,12 +242,10 @@ function cancelPassword() {
 }
 
 function deleteSelectedRecord(col, row) {
-  const lists = [normalRecords, hardRecords, taRecords];
-  const lsKeys = ['axeRunnerNormalRecords', 'axeRunnerHardRecords', 'axeRunnerRecords'];
-  const list = lists[col];
+  const list = [normalRecords, hardRecords, taRecords][col];
   if (row < list.length) {
     list.splice(row, 1);
-    localStorage.setItem(lsKeys[col], JSON.stringify(list));
+    syncRecords(col);
     recRow = Math.max(0, Math.min(recRow, list.length - 1));
   }
 }
@@ -251,12 +253,8 @@ function deleteSelectedRecord(col, row) {
 function resetAllRecords() {
   taRecords = []; normalRecords = []; hardRecords = [];
   bestTime = null; bestDistance = null; bestHardDistance = null;
-  localStorage.removeItem('axeRunnerRecords');
-  localStorage.removeItem('axeRunnerNormalRecords');
-  localStorage.removeItem('axeRunnerHardRecords');
-  localStorage.removeItem('axeRunnerBest');
-  localStorage.removeItem('axeRunnerBestDist');
-  localStorage.removeItem('axeRunnerHardBestDist');
+  LS_KEYS.forEach(k => localStorage.removeItem(k));
+  ['axeRunnerBest','axeRunnerBestDist','axeRunnerHardBestDist'].forEach(k => localStorage.removeItem(k));
 }
 
 const layers = [
@@ -346,7 +344,7 @@ document.addEventListener('keydown', e => {
         const maxRow = adminMode ? Math.min(49, list.length - 1) : Math.min(9, list.length - 1);
         recRow = Math.min(maxRow, recRow + 1);
       }
-      if (e.code === 'Delete') {
+      if (e.code === 'Delete' && adminMode) {
         const list = [normalRecords, hardRecords, taRecords][recCol];
         if (list.length > 0 && recRow < list.length) {
           pendingDelCol = recCol; pendingDelRow = recRow;
@@ -1455,7 +1453,7 @@ function drawRecords() {
     ctx.fillText('← → 列選択   ↑ ↓ 行選択   [Del] 削除   [E] 名前変更   [A] 終了   [Esc] 戻る', 400, 396);
   } else {
     ctx.fillStyle='#444'; ctx.font='11px monospace'; ctx.textAlign='center';
-    ctx.fillText('← → 列選択   ↑ ↓ 行選択   [Del] 削除（PW必須）   [A] 管理者   [Esc] 戻る', 400, 396);
+    ctx.fillText('← → 列選択   ↑ ↓ 行選択   [A] 管理者モード   [Esc] 戻る', 400, 396);
   }
   ctx.textAlign='left';
 }
