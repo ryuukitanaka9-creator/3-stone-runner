@@ -220,7 +220,7 @@ function showPasswordInput(mode) {
   pwMode = mode;
   pwError.textContent = '';
   pwInput.value = '';
-  pwTitle.textContent = mode === 'admin' ? '管理者パスワードを入力' : '削除パスワードを入力';
+  pwTitle.textContent = mode === 'admin' ? '管理者パスワードを入力' : mode === 'deleteAll' ? '全リセット — パスワードを入力' : '削除パスワードを入力';
   pwOverlay.style.display = 'block';
   setTimeout(() => pwInput.focus(), 50);
 }
@@ -359,12 +359,12 @@ document.addEventListener('keydown', e => {
       if (e.code === 'Delete' && adminMode) {
         const list = [normalRecords, hardRecords, taRecords][recCol];
         if (list.length > 0 && recRow < list.length) {
-          pendingDelCol = recCol; pendingDelRow = recRow;
-          showPasswordInput('deleteOne');
+          deleteSelectedRecord(recCol, recRow);
         }
       }
       if (e.code === 'KeyA' && !adminMode) showPasswordInput('admin');
       if (e.code === 'KeyA' && adminMode) adminMode = false;
+      if (e.code === 'KeyR' && adminMode) showPasswordInput('deleteAll');
       if (e.code === 'KeyE' && adminMode) {
         const list = [normalRecords, hardRecords, taRecords][recCol];
         if (list.length > 0 && recRow < list.length) {
@@ -1114,7 +1114,6 @@ function draw() {
     ctx.fillStyle = '#4fa'; ctx.fillRect(0, 32, 800*pct, 6);
     ctx.fillStyle = '#4fa'; ctx.font = 'bold 16px monospace';
     ctx.fillText(`TIME ${formatTime(elapsedMs)}`, 270, 24);
-    if (bestTime !== null) { ctx.fillStyle = '#fa4'; ctx.fillText(`BEST ${formatTime(bestTime)}`, 510, 24); }
     if (timeBonusDisplay > 0) {
       ctx.save();
       ctx.globalAlpha = Math.min(1, timeBonusDisplay / 20);
@@ -1123,16 +1122,22 @@ function draw() {
       ctx.textAlign = 'left';
       ctx.restore();
     }
-  } else if (gameMode === 'hard') {
-    if (bestHardDistance !== null) { ctx.fillStyle = '#fa4'; ctx.font = 'bold 14px monospace'; ctx.fillText(`BEST: ${bestHardDistance}m`, 510, 25); }
-  } else {
-    if (bestDistance !== null) { ctx.fillStyle = '#fa4'; ctx.font = 'bold 14px monospace'; ctx.fillText(`BEST: ${bestDistance}m`, 510, 25); }
   }
   // Mode label top-right
   { const modeLabel = gameMode === 'timeattack' ? 'T.ATTACK' : gameMode.toUpperCase();
     const modeColor = gameMode === 'normal' ? '#4af' : gameMode === 'hard' ? '#f84' : '#fa4';
     ctx.fillStyle = modeColor; ctx.font = 'bold 12px monospace'; ctx.textAlign = 'right';
     ctx.fillText(modeLabel, 792, 25); ctx.textAlign = 'left'; }
+  // Rank #1 display
+  { const r1list = gameMode === 'timeattack' ? taRecords : gameMode === 'hard' ? hardRecords : normalRecords;
+    if (r1list.length > 0) {
+      const r1 = r1list[0];
+      const r1val = gameMode === 'timeattack' ? formatTime(r1.ms) : `${r1.dist}m`;
+      ctx.fillStyle = '#fa4'; ctx.font = 'bold 11px monospace'; ctx.textAlign = 'right';
+      ctx.fillText(`👑 ${r1.name.slice(0,8)}  ${r1val}`, 788, 35);
+      ctx.textAlign = 'left';
+    }
+  }
 
   if (invincible) {
     ctx.fillStyle = `rgba(192,96,255,${0.8+0.2*Math.sin(frameCount*0.15)})`;
@@ -1358,7 +1363,6 @@ function drawModeSelect() {
   ctx.fillText('NORMAL', cx0, PY+42);
   ctx.fillStyle='#aaa'; ctx.font='11px monospace';
   ctx.fillText('エンドレスラン', cx0, PY+62);
-  if (bestDistance!==null) { ctx.fillStyle='#fa4'; ctx.font='10px monospace'; ctx.fillText(`BEST: ${bestDistance}m`, cx0, PY+80); }
 
   // Hard
   const s1 = modeSelCursor===1;
@@ -1371,7 +1375,6 @@ function drawModeSelect() {
   ctx.fillText('ハードエンドレスラン', cx1, PY+58);
   ctx.fillStyle='#f66'; ctx.font='10px monospace';
   ctx.fillText('敵・障害物 多め', cx1, PY+74);
-  if (bestHardDistance!==null) { ctx.fillStyle='#fa4'; ctx.font='10px monospace'; ctx.fillText(`BEST: ${bestHardDistance}m`, cx1, PY+88); }
 
   // Time Attack
   const s2 = modeSelCursor===2;
@@ -1384,7 +1387,6 @@ function drawModeSelect() {
   ctx.fillText('1000mゴール', cx2, PY+58);
   ctx.fillStyle='#8cf'; ctx.font='10px monospace';
   ctx.fillText('敵撃破→-1s', cx2, PY+74);
-  if (bestTime!==null) { ctx.fillStyle='#fa4'; ctx.font='10px monospace'; ctx.fillText(`BEST: ${formatTime(bestTime)}`, cx2, PY+88); }
 
   ctx.fillStyle='#888'; ctx.font='12px monospace'; ctx.textAlign='center';
   ctx.fillText('[Enter] ジャンプ   [A] ブースト   [S] ハンマーを振る   [Esc] ホームへ', 400, 275);
@@ -1395,7 +1397,7 @@ function drawModeSelect() {
   ctx.fillText('キノコ → 取ると3秒間無敵 ＋ 2倍速', 400, 357);
 
   ctx.fillStyle='#445'; ctx.font='11px monospace'; ctx.textAlign='right';
-  ctx.fillText('Ver. 2.3', 792, 392);
+  ctx.fillText('Ver. 2.3.1', 792, 392);
   if (swordMode) {
     ctx.fillStyle='#88aaff'; ctx.font='bold 11px monospace';
     ctx.fillText('⚔ SWORD MODE', 792, 378);
@@ -1569,7 +1571,7 @@ function drawRecords() {
     ctx.fillStyle='#f84'; ctx.font='bold 11px monospace'; ctx.textAlign='right';
     ctx.fillText('ADMIN MODE  [A] 終了', 795, 14);
     ctx.fillStyle='#555'; ctx.font='11px monospace'; ctx.textAlign='center';
-    ctx.fillText('← → 列選択   ↑ ↓ 行選択   [Del] 削除   [E] 名前変更   [A] 終了   [Esc] 戻る', 400, 396);
+    ctx.fillText('← → 列選択   ↑ ↓ 行選択   [Del] 削除   [E] 名前変更   [R] 全リセット   [A] 終了   [Esc] 戻る', 400, 396);
   } else {
     ctx.fillStyle='#444'; ctx.font='11px monospace'; ctx.textAlign='center';
     ctx.fillText('← → 列選択   ↑ ↓ 行選択   [A] 管理者モード   [Esc] 戻る', 400, 396);
